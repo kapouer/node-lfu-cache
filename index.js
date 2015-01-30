@@ -3,29 +3,72 @@ var util = require('util');
 
 module.exports = LFU;
 
-function LFU(size, aging) {
-	if (!(this instanceof LFU)) return new LFU(size, aging);
+function LFU(size, halflife) {
+	if (!(this instanceof LFU)) return new LFU(size, halflife);
 	this.size = size || 10;
-	this.aging = aging || null;
+	this.halflife = halflife || null;
 	this.cache = {};
 	this.head = freq();
 	this.length = 0;
+	this.lastDecay = Date.now();
 }
 util.inherits(LFU, events.EventEmitter);
 
 LFU.prototype.get = function(key) {
 	var el = this.cache[key];
 	if (!el) return;
-	var curfreq = el.parent;
-	var nextfreq = freq.next;
-	if (!nextfreq || nextfreq.weight != curfreq.weight + 1) {
-		nextfreq = node(curfreq.weight + 1, curfreq, nextfreq);
+	var cur = el.parent;
+	var next = cur.next;
+	if (!next || next.weight != cur.weight + 1) {
+		next = node(cur.weight + 1, cur, next);
 	}
-	this.removeParent(el.parent, key);
-	nextfreq.items.add(key);
-	el.parent = nextfreq;
-	el.atime = Date.now();
+	this.removeFromParent(el.parent, key);
+	next.items.add(key);
+	el.parent = next;
+	var now = Date.now();
+	el.atime = now;
+	if (this.halflife && now - this.lastDecay >= this.halflife) this.decay();
+	this.atime = now;
 	return el.data;
+};
+
+LFU.prototype.decay = function() {
+	// iterate over all entries and move the ones that have
+	// this.atime - el.atime > this.halflife
+	// to lower freq nodes
+	// the idea is that if there is 10 hits / minute, and a minute gap,
+	var now = Date.now();
+	this.lastDecay = now;
+	var diff = now - this.halflife;
+	var halflife = this.halflife;
+	var el, weight, cur, prev;
+	for (var key in this.cache) {
+		el = this.cache[key];
+		if (diff > el.atime) {
+			// decay that one
+			// 1) find freq
+			cur = el.parent;
+			weight = Math.round(cur.weight / 2);
+			if (weight == 1) continue;
+			prev = cur.prev;
+			while (prev) {
+				if (prev.weight <= weight) break;
+				cur = prev;
+				prev = prev.prev;
+			}
+			if (!prev || !cur) {
+				throw new Error("Empty before and after halved weight - please report");
+			}
+			// 2) either prev has the right weight, or we must insert a freq with
+			// the right weight
+			if (prev.weight < weight) {
+				prev = node(weight, prev, cur);
+			}
+			this.removeFromParent(el.parent, key);
+			el.parent = prev;
+			prev.items.add(key);
+		}
+	}
 };
 
 LFU.prototype.set = function(key, obj) {
@@ -34,19 +77,23 @@ LFU.prototype.set = function(key, obj) {
 		el.data = obj;
 		return;
 	}
+	var now = Date.now();
+	if (this.halflife && now - this.lastDecay >= this.halflife) {
+		this.decay();
+	}
 	if (this.length == this.size) {
 		this.evict();
 	}
 	this.length++;
-	var curfreq = this.head.next;
-	if (!curfreq || curfreq.weight != 1) {
-		curfreq = node(1, this.head, curfreq);
+	var cur = this.head.next;
+	if (!cur || cur.weight != 1) {
+		cur = node(1, this.head, cur);
 	}
-	curfreq.items.add(key);
+	cur.items.add(key);
 	this.cache[key] = {
 		data: obj,
-		atime: Date.now(),
-		parent: curfreq
+		atime: now,
+		parent: cur
 	};
 };
 
@@ -54,12 +101,12 @@ LFU.prototype.remove = function(key) {
 	var el = this.cache[key];
 	if (!el) return;
 	delete this.cache[key];
-	this.removeParent(el.parent, key);
+	this.removeFromParent(el.parent, key);
 	this.length--;
 	return el.data;
 };
 
-LFU.prototype.removeParent = function(parent, key) {
+LFU.prototype.removeFromParent = function(parent, key) {
 	parent.items.remove(key);
 	if (parent.items.length == 0) {
 		parent.prev.next = parent.next;
@@ -71,6 +118,8 @@ LFU.prototype.evict = function() {
 	var least = this.head.next && this.head.next.items.first();
 	if (least) {
 		this.emit('eviction', least, this.remove(least));
+	} else {
+		throw new Error("Cannot find an element to evict - please report issue");
 	}
 };
 
