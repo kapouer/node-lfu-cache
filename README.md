@@ -5,11 +5,15 @@ This module implements an O(1) Least Frequently Used cache, as described
 in the paper "An O(1) algorithm for implementing the LFU cache eviction scheme"
 by K. Shah, A. Mitra and D. Matani.
 
-It also features an "aging" parameter that penalizes objects that have not
-been accessed since `Date.now() - aging * 1000`, by halving their frequency
-every 'aging' seconds.
+It also features a "decay" parameter (default null, no decay) that penalizes
+objects that have not been accessed after `Date.now() - decay`, by halving their
+frequency every 'decay' milliseconds.
 
-The cache emits an "eviction" event with parameters (key, value).
+Important: decay happens at most every `decay` milliseconds, and it's a costly
+operation, so this parameter should not be too small (a minute is good).
+
+The cache emits an "eviction" event with parameters (key, value), when
+a least frequently used element has been evicted to make room for the cache.
 
 Usage
 -----
@@ -18,7 +22,7 @@ Usage
 
 var lfu = require('lfu-cache')(
 	2,   // max size of the cache
-	60    // aging of the entries in seconds
+	60000    // decay of the entries in milliseconds
 );
 
 lfu.on('eviction', function(key, obj) {
