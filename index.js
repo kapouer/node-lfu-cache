@@ -1,5 +1,6 @@
 var events = require('events');
 var util = require('util');
+var circularJSON = require('circular-json');
 
 module.exports = LFU;
 
@@ -107,6 +108,7 @@ LFU.prototype.remove = function(key) {
 };
 
 LFU.prototype.removeFromParent = function(parent, key) {
+	Object.setPrototypeOf(parent.items, new Set());
 	parent.items.remove(key);
 	if (parent.items.length == 0) {
 		parent.prev.next = parent.next;
@@ -122,6 +124,14 @@ LFU.prototype.evict = function() {
 		throw new Error("Cannot find an element to evict - please report issue");
 	}
 };
+
+LFU.prototype.export = function() {
+	return circularJSON.stringify(this.cache);
+}
+
+LFU.prototype.import = function(cache) {
+	this.cache = circularJSON.parse(cache);
+}
 
 function freq() {
 	return {
